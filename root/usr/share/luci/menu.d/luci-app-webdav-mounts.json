@@ -1,0 +1,14 @@
+{
+	"admin/services/webdav-mounts": {
+		"title": "WebDAV Mounts",
+		"order": 60,
+		"action": {
+			"type": "view",
+			"path": "webdav-mounts"
+		},
+		"depends": {
+			"acl": [ "luci-app-webdav-mounts" ],
+			"uci": { "webdav-mounts": true }
+		}
+	}
+}

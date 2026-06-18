@@ -1,0 +1,5 @@
+config global 'global'
+	option base_mount_dir '/mnt'
+	option allow_other '1'
+	option read_only '0'
+	option other_options ''

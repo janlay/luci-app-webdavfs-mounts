@@ -1,0 +1,184 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+
+extra_command "running" "Check if any enabled WebDAV mount is mounted"
+extra_command "status" "Show WebDAV mount status"
+
+parse_global() {
+    config_get base_mount_dir "$1" base_mount_dir "__unset__"
+    [ "$base_mount_dir" = "__unset__" ] && config_get base_mount_dir "$1" base_mount_point "/mnt/openlist"
+
+    config_get_bool global_allow_other "$1" allow_other 1
+    config_get_bool global_read_only "$1" read_only 0
+    config_get global_other_options "$1" other_options ""
+}
+
+load_webdav_config() {
+    base_mount_dir="/mnt/openlist"
+    global_allow_other=1
+    global_read_only=0
+    global_other_options=""
+
+    config_load webdav-mounts
+    config_foreach parse_global global
+}
+
+normalize_prefix() {
+    local prefix="$1"
+
+    case "$prefix" in
+        "") printf '%s' "" ;;
+        /*) printf '%s' "$prefix" ;;
+        *) printf '/%s' "$prefix" ;;
+    esac
+}
+
+get_mount_dir() {
+    local cfg="$1"
+    local name mount_dir_mode
+
+    config_get name "$cfg" name
+    config_get mount_dir_mode "$cfg" mount_dir_mode "default"
+
+    if [ "$mount_dir_mode" = "custom" ]; then
+        config_get mount_dir "$cfg" mount_dir
+    else
+        [ -n "$base_mount_dir" ] || return 1
+        mount_dir="${base_mount_dir%/}/$name"
+    fi
+
+    [ -n "$mount_dir" ] || return 1
+    return 0
+}
+
+is_mounted() {
+    awk -v m="$1" '$2 == m { found = 1 } END { if (found) exit 0; exit 1 }' /proc/mounts
+}
+
+mount_entry() {
+    local cfg="$1"
+    local name host enabled use_https port path_prefix
+    local require_credential username password allow_other allow_other_value read_only read_only_value other_options
+    local proto url opts
+
+    config_get name "$cfg" name
+    config_get host "$cfg" host
+    config_get_bool enabled "$cfg" enabled 1
+
+    [ "$enabled" -eq 0 ] && return
+    [ -n "$name" ] || return
+    [ -n "$host" ] || return
+
+    config_get_bool use_https "$cfg" use_https 0
+    config_get port "$cfg" port ""
+    config_get path_prefix "$cfg" path_prefix ""
+
+    config_get_bool require_credential "$cfg" require_credential 0
+    if [ "$require_credential" -eq 1 ]; then
+        config_get username "$cfg" username ""
+        config_get password "$cfg" password ""
+        [ -n "$username" ] || return
+    else
+        username=""
+        password=""
+    fi
+
+    config_get allow_other_value "$cfg" allow_other ""
+    if [ -n "$allow_other_value" ]; then
+        config_get_bool allow_other "$cfg" allow_other "$global_allow_other"
+    else
+        allow_other="$global_allow_other"
+    fi
+
+    config_get read_only_value "$cfg" read_only ""
+    if [ -n "$read_only_value" ]; then
+        config_get_bool read_only "$cfg" read_only "$global_read_only"
+    else
+        read_only="$global_read_only"
+    fi
+
+    config_get other_options "$cfg" other_options ""
+    [ -n "$other_options" ] || other_options="$global_other_options"
+
+    get_mount_dir "$cfg" || return
+
+    proto="http"
+    [ "$use_https" -eq 1 ] && proto="https"
+
+    if [ -z "$port" ]; then
+        [ "$use_https" -eq 1 ] && port=443 || port=80
+    fi
+
+    path_prefix="$(normalize_prefix "$path_prefix")"
+    url="$proto://$host:$port$path_prefix"
+
+    if [ "$read_only" -eq 1 ]; then
+        opts="ro,writeback_cache,nonempty"
+    else
+        opts="rw,writeback_cache,nonempty"
+    fi
+    [ "$require_credential" -eq 1 ] && opts="$opts,username=$username,password=$password"
+    [ "$allow_other" -eq 1 ] && opts="$opts,allow_other"
+    [ -n "$other_options" ] && opts="$opts,$other_options"
+
+    mkdir -p "$mount_dir"
+    is_mounted "$mount_dir" && return
+
+    echo "Mounting $name to $mount_dir ..."
+    /usr/sbin/mount.webdavfs -o "$opts" "$url" "$mount_dir" </dev/null >/dev/null 2>&1 &
+}
+
+unmount_entry() {
+    local cfg="$1"
+
+    get_mount_dir "$cfg" || return
+
+    if is_mounted "$mount_dir"; then
+        echo "Unmounting $mount_dir..."
+        umount -l "$mount_dir"
+    fi
+}
+
+check_entry_running() {
+    local cfg="$1"
+    local enabled
+
+    config_get_bool enabled "$cfg" enabled 1
+    [ "$enabled" -eq 0 ] && return
+
+    get_mount_dir "$cfg" || return
+    is_mounted "$mount_dir" && mounted_any=1
+}
+
+start() {
+    load_webdav_config
+    config_foreach mount_entry mount
+}
+
+stop() {
+    load_webdav_config
+    config_foreach unmount_entry mount
+}
+
+reload() {
+    stop
+    start
+}
+
+running() {
+    load_webdav_config
+    mounted_any=0
+    config_foreach check_entry_running mount
+    [ "$mounted_any" -eq 1 ]
+}
+
+status() {
+    if running; then
+        echo "Running"
+        return 0
+    fi
+
+    echo "Stopped"
+    return 1
+}

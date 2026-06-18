@@ -1,0 +1,23 @@
+{
+	"luci-app-webdav-mounts": {
+		"description": "Grant access to webdav-mounts configuration",
+		"read": {
+			"file": {
+				"/etc/init.d/webdav-mounts running": [ "exec" ],
+				"/usr/bin/curl": [ "exec" ],
+				"/usr/sbin/mount.webdavfs --version": [ "exec" ]
+			},
+			"ubus": {
+				"file": [ "exec" ],
+				"rc": [ "list" ]
+			},
+			"uci": [ "webdav-mounts" ]
+		},
+		"write": {
+			"ubus": {
+				"rc": [ "init" ]
+			},
+			"uci": [ "webdav-mounts" ]
+		}
+	}
+}
