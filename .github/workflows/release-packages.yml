@@ -1,0 +1,134 @@
+name: Release packages
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  APK_TOOLS_IMAGE: alpine:3.23
+  OPENWRT_PACKAGE_ARCH: noarch
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve package version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          release="1"
+
+          if [[ "$version" =~ ^(.+)-r([0-9]+)$ ]]; then
+            release="${BASH_REMATCH[2]}"
+            version="${BASH_REMATCH[1]}"
+          fi
+
+          if [[ -z "$version" || "$version" == "$tag" && "$tag" == refs/* ]]; then
+            echo "Unable to derive package version from tag: $tag" >&2
+            exit 1
+          fi
+
+          {
+            echo "PACKAGE_VERSION=$version"
+            echo "PACKAGE_RELEASE=$release"
+            echo "PACKAGE_FULL_VERSION=$version-r$release"
+          } >> "$GITHUB_ENV"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            ca-certificates
+
+      - name: Build ipk
+        run: |
+          make clean
+          make \
+            PKG_VERSION="$PACKAGE_VERSION" \
+            PKG_RELEASE="$PACKAGE_RELEASE"
+
+          mkdir -p dist
+          cp build/*.ipk dist/
+
+      - name: Build apk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run --rm \
+            -v "$PWD":/work \
+            -w /work \
+            -e APK_ARCH="$OPENWRT_PACKAGE_ARCH" \
+            -e PKG_VERSION="$PACKAGE_VERSION" \
+            -e PKG_RELEASE="$PACKAGE_RELEASE" \
+            "$APK_TOOLS_IMAGE" \
+            ./scripts/build-apk.sh
+
+          cp build/*.apk dist/
+
+      - name: Show release artifacts
+        run: |
+          ls -lh dist
+          test -n "$(find dist -type f -name '*.ipk' -print -quit)"
+          test -n "$(find dist -type f -name '*.apk' -print -quit)"
+
+      - name: Generate release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_tag="$GITHUB_REF_NAME"
+          current_commit="$(git rev-list -n 1 "$current_tag")"
+          previous_tag="$(git describe --tags --abbrev=0 "${current_commit}^" 2>/dev/null || true)"
+
+          if [[ -n "$previous_tag" ]]; then
+            log_range="$previous_tag..$current_tag"
+          else
+            log_range="$current_tag"
+          fi
+
+          {
+            echo "## What's Changed"
+            echo
+
+            git log --reverse --format=%s "$log_range" > release-commit-subjects.txt
+
+            if [[ -s release-commit-subjects.txt ]]; then
+              sed 's/^/- /' release-commit-subjects.txt
+            else
+              echo "- No changes"
+            fi
+          } > release-notes.md
+
+          cat release-notes.md
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --generate-notes
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file release-notes.md \
+              --generate-notes
+          fi

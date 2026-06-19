@@ -5,7 +5,7 @@ script_dir=$(CDPATH= cd "$(dirname "$0")" && pwd)
 repo_dir=$(CDPATH= cd "$script_dir/.." && pwd)
 
 pkg_name=${PKG_NAME:-luci-app-webdavfs-mounts}
-pkg_version=${PKG_VERSION:-0.1.0}
+pkg_version=${PKG_VERSION:-0.2}
 pkg_release=${PKG_RELEASE:-1}
 pkg_arch=${PKG_ARCH:-all}
 pkg_license=${PKG_LICENSE:-MIT}
@@ -28,7 +28,7 @@ tmp_dir="$build_dir/.tmp-ipk"
 data_dir="$tmp_dir/data"
 control_dir="$tmp_dir/control"
 ar_dir="$tmp_dir/ar"
-output="$build_dir/${pkg_name}_${version}_${pkg_arch}.ipk"
+output="$build_dir/${pkg_name}_${version}.ipk"
 
 require_tool() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -42,7 +42,12 @@ make_tar_gz() {
     src=$2
 
     rm -f "$out"
-    COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --uname root --gname root -czf "$out" -C "$src" .
+
+    if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+        COPYFILE_DISABLE=1 tar --owner=0 --group=0 --numeric-owner -czf "$out" -C "$src" .
+    else
+        COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --uname root --gname root -czf "$out" -C "$src" .
+    fi
 }
 
 for tool in ar awk du find mkdir rm tar; do
